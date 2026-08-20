@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>PS5 Game Hub</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+:root{
+    --bg:#0d0d0d;
+    --glass:#1a1a1aaa;
+    --accent:#ff0066;
+    --text:#e0e0e0;
+    --card:#222;
+}
+body,html{
+    margin:0;padding:0;height:100%;font-family:Arial,Helvetica,sans-serif;
+    background:radial-gradient(circle at 20% 20%,#111,#000);
+    color:var(--text);
+    overflow:hidden;
+}
+#loginScreen,#dashboard{
+    position:absolute;top:0;left:0;width:100%;height:100%;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    background:rgba(0,0,0,0.8);
+    backdrop-filter:blur(8px);
+}
+.hidden{display:none;}
+h1{margin:0.5em 0;font-weight:300;}
+button{
+    background:var(--glass);
+    border:none;padding:0.8em 1.5em;
+    margin:0.5em;
+    color:var(--text);
+    border-radius:8px;
+    cursor:pointer;
+    transition:background .3s,transform .1s;
+}
+button:hover{background:var(--accent);transform:scale(1.05);}
+input{
+    padding:0.6em;
+    margin:0.3em;
+    border:none;border-radius:6px;
+    background:var(--glass);
+    color:var(--text);
+}
+#userList{max-height:200px;overflow:auto;margin:1em;}
+.userItem{
+    background:var(--glass);
+    padding:0.5em 1em;
+    margin:0.3em 0;
+    border-radius:6px;
+    cursor:pointer;
+}
+#dashboard{
+    padding:1em;
+    overflow-y:auto;
+}
+.grid{
+    display:grid;
+    grid-template-columns:repeat(auto-fit,minmax(120px,1fr));
+    gap:1em;
+    width:100%;
+}
+.card{
+    background:var(--glass);
+    border-radius:12px;
+    padding:1em;
+    text-align:center;
+    cursor:pointer;
+    transition:transform .2s,box-shadow .2s;
+    backdrop-filter:blur(4px);
+}
+.card:hover{
+    transform:translateY(-4px);
+    box-shadow:0 0 15px var(--accent);
+}
+.modal{
+    position:fixed;top:0;left:0;width:100%;height:100%;
+    background:rgba(0,0,0,0.9);
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    backdrop-filter:blur(6px);
+    z-index:1000;
+}
+.modalContent{
+    background:var(--glass);
+    border-radius:12px;
+    padding:1em;
+    width:90%;max-width:500px;
+    max-height:90%;
+    overflow:auto;
+    position:relative;
+}
+.closeBtn{
+    position:absolute;top:0.5em;right:0.5em;
+    background:none;color:var(--text);
+    font-size:1.5em;cursor:pointer;
+}
+canvas{background:#111;display:block;margin:auto;}
+.instructions{font-size:0.9em;margin:0.5em 0;color:#aaa;}
+.scoreBoard{margin:0.5em 0;font-weight:bold;}
+</style>
+</head>
+<body>
+<div id="loginScreen">
+    <h1>Who is playing today?</h1>
+    <div id="userList"></div>
+    <button id="addUserBtn">Add User</button>
+    <div id="addUserForm" class="hidden">
+        <input type="text" id="newUsername" placeholder="Username">
+        <input type="password" id="newPassword" placeholder="Password">
+        <button id="createUser">Create</button>
+    </div>
+</div>
+
+<div id="dashboard" class="hidden">
+    <h1 id="welcomeMsg"></h1>
+    <div class="grid" id="gameGrid"></div>
+    <button id="switchUserBtn">Switch User</button>
+</div>
+
+<div id="gameModal" class="modal hidden">
+    <div class="modalContent">
+        <span class="closeBtn" id="closeModal">&times;</span>
+        <h2 id="gameTitle"></h2>
+        <div class="instructions" id="gameInstructions"></div>
+        <div class="scoreBoard" id="scoreBoard"></div>
+        <canvas id="gameCanvas"></canvas>
+    </div>
+</div>
+
+<script>
+/* ---------- Data Management ---------- */
+const STORAGE_KEY='ps5hub';
+let data=JSON.parse(localStorage.getItem(STORAGE_KEY))||{users:[],currentUser:null};
+function saveData(){localStorage.setItem(STORAGE_KEY,JSON.stringify(data));}
+function getCurrentUser(){return data.users.find(u=>u.username===data.currentUser);}
+function updateUI(){
+    const login=document.getElementById('loginScreen');
+    const dash=document.getElementById('dashboard');
+    if(data.currentUser){
+        login.classList.add('hidden');
+        dash.classList.remove('hidden');
+        document.getElementById('welcomeMsg').textContent=`Welcome, ${data.currentUser}`;
+        renderUserList();
+        renderGames();
+    }else{
+        login.classList.remove('hidden');
+        dash.classList.add('hidden');
+        renderUserList();
+    }
+}
+function renderUserList(){
+    const list=document.getElementById('userList');
+    list.innerHTML='';
+    data.users.forEach(u=>{
+        const div=document.createElement('div');
+        div.className='userItem';
+        div.textContent=u.username;
+        div.onclick=()=>{data.currentUser=u.username;saveData();updateUI();};
+        list.appendChild(div);
+    });
+}
+document.getElementById('addUserBtn').onclick=()=>{document.getElementById('addUserForm').classList.toggle('hidden');};
+document.getElementById('createUser').onclick=()=>{
+    const name=document.getElementById('newUsername').value.trim();
+    const pass=document.getElementById('newPassword').value;
+    if(name && pass && !data.users.some(u=>u.username===name)){
+        data.users.push({username:name,password:pass,scores:{}});
+        data.currentUser=name;
+        saveData();
+        document.getElementById('addUserForm').classList.add('hidden');
+        document.getElementById('newUsername').value='';document.getElementById('newPassword').value='';
+        updateUI();
+    }
+};
+document.getElementById('switchUserBtn').onclick=()=>{data.currentUser=null;saveData();updateUI();};
+
+/* ---------- Game Registry ---------- */
+const games=[
+    {id:'snake',name:'Snake',init:snakeGame,instructions:'Use arrow keys or swipe to move. Eat food to grow.',score:true},
+    {id:'pong',name:'Pong',init:pongGame,instructions:'Touch left/right side to move paddle.',score:true},
+    {id:'breakout',name:'Breakout',init:breakoutGame,instructions:'Tap to launch ball, move paddle with touch.',score:true},
+    {id:'tetris',name:'Tetris',init:tetrisGame,instructions:'Swipe left/right to move, tap to rotate.',score:true},
+    {id:'memory',name:'Memory Match',init:memoryGame,instructions:'Tap cards to find pairs.',score:true},
+    {id:'ticTacToe',name:'Tic‑Tac‑Toe',init:ticTacToeGame,instructions:'Play against CPU.',score:true},
+    {id:'minesweeper',name:'Minesweeper',init:minesweeperGame,instructions:'Tap cells to reveal, long‑press to flag.',score:true},
+    {id:'2048',name:'2048',init:game2048,instructions:'Swipe to move tiles.',score:true},
+    {id:'spaceBlaster',name:'Space Blaster',init:spaceBlasterGame,instructions:'Tap to shoot, avoid enemies.',score:true},
+    {id:'flappy',name:'Flappy',init:flappyGame,instructions:'Tap to flap.',score:true}
+];
+function renderGames(){
+    const grid=document.getElementById('gameGrid');
+    grid.innerHTML='';
+    games.forEach(g=>{
+        const card=document.createElement('div');
+        card.className='card';
+        card.textContent=g.name;
+        card.onclick=()=>openGame(g);
+        grid.appendChild(card);
+    });
+}
+
+/* ---------- Modal Management ---------- */
+let currentLoop=null;
+function openGame(g){
+    const modal=document.getElementById('gameModal');
+    document.getElementById('gameTitle').textContent=g.name;
+    document.getElementById('gameInstructions').textContent=g.instructions;
+    const canvas=document.getElementById('gameCanvas');
+    canvas.width=window.innerWidth*0.9;
+    canvas.height=window.innerHeight*0.6;
+    document.getElementById('scoreBoard').textContent='';
+    modal.classList.remove('hidden');
+    const user=getCurrentUser();
+    const high=user.scores[g.id]||0;
+    if(g.score) document.getElementById('scoreBoard').textContent=`Best: ${high}`;
+    const ctx=canvas.getContext('2d');
+    if(currentLoop) cancelAnimationFrame(currentLoop);
+    const stop=()=>{if(currentLoop) cancelAnimationFrame(currentLoop);};
+    const saveScore=(score)=>{if(score>high){user.scores[g.id]=score;saveData();document.getElementById('scoreBoard').textContent=`Best: ${score}`;}};
+    currentLoop=g.init(ctx,canvas,saveScore,stop);
+}
+document.getElementById('closeModal').onclick=()=>{
+    document.getElementById('gameModal').classList.add('hidden');
+    if(currentLoop) cancelAnimationFrame(currentLoop);
+};
+
+/* ---------- Game Implementations ---------- */
+function ticTacToeGame(ctx,canvas,saveScore,stop){
+    const n=3, cells=9; let board=Array(cells).fill(''); let turn='X'; let over=false; let message='Your turn';
+    function winner(b){
+        const lines=[[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+        for(const l of lines) if(b[l[0]]&&b[l[0]]===b[l[1]]&&b[l[1]]===b[l[2]]) return b[l[0]];
+        return b.every(Boolean)?'draw':null;
+    }
+    function cpuMove(){
+        const free=board.map((v,i)=>v?null:i).filter(v=>v!==null);
+        if(!free.length||over)return;
+        let pick=free[Math.floor(Math.random()*free.length)];
+        for(const i of free){const t=board.slice();t[i]='O';if(winner(t)==='O'){pick=i;break}}
+        board[pick]='O'; turn='X'; const w=winner(board); if(w)finish(w); else message='Your turn';
+    }
+    function finish(w){over=true;if(w==='X'){message='You win!';saveScore((getCurrentUser().scores.ticTacToe||0)+1)}else if(w==='O')message='CPU wins';else message='Draw';stop();}
+    function draw(){
+        ctx.fillStyle='#08101a';ctx.fillRect(0,0,canvas.width,canvas.height);
+        const size=Math.min(canvas.width,canvas.height)*.65, left=(canvas.width-size)/2, top=(canvas.height-size)/2;
+        ctx.strokeStyle='#6da8ff';ctx.lineWidth=Math.max(4,size/110);
+        for(let i=1;i<3;i++){ctx.beginPath();ctx.moveTo(left+i*size/3,top);ctx.lineTo(left+i*size/3,top+size);ctx.stroke();ctx.beginPath();ctx.moveTo(left,top+i*size/3);ctx.lineTo(left+size,top+i*size/3);ctx.stroke();}
+        ctx.textAlign='center';ctx.textBaseline='middle';ctx.font=`bold ${Math.max(34,size/4)}px system-ui`;
+        board.forEach((v,i)=>{if(!v)return;const cx=left+(i%3+.5)*size/3,cy=top+(Math.floor(i/3)+.5)*size/3;ctx.fillStyle=v==='X'?'#9ed0ff':'#ff8aa1';ctx.fillText(v,cx,cy)});
+        ctx.font='bold 24px system-ui';ctx.fillStyle='#fff';ctx.fillText(message,canvas.width/2,Math.min(canvas.height-20,top+size+42));
+    }
+    function click(e){if(over||turn!=='X')return;const r=canvas.getBoundingClientRect();const px=(e.clientX-r.left)*(canvas.width/r.width),py=(e.clientY-r.top)*(canvas.height/r.height);const size=Math.min(canvas.width,canvas.height)*.65,left=(canvas.width-size)/2,top=(canvas.height-size)/2;if(px<left||py<top||px>left+size||py>top+size)return;const col=Math.floor((px-left)/(size/3)),row=Math.floor((py-top)/(size/3)),i=row*3+col;if(board[i])return;board[i]='X';turn='O';const w=winner(board);if(w){finish(w);draw();return}message='CPU thinking…';draw();setTimeout(cpuMove,280)}
+    canvas.addEventListener('pointerdown',click); function loop(){draw();return requestAnimationFrame(loop)}; const id=requestAnimationFrame(loop); draw();
+    return id;
+}
+
+function snakeGame(ctx,canvas,saveScore,stop){
+    const cols=20, rows=20;
+    const cw=canvas.width/cols,ch=canvas.height/rows;
+    let snake=[[10,10]];
+    let dir=[0,0];
+    let food=[Math.floor(Math.random()*cols),Math.floor(Math.random()*rows)];
+    let score=0;
+    function draw(){
+        ctx.fillStyle='#111';ctx.fillRect(0,0,canvas.width,canvas.height);
+        ctx.fillStyle='lime';
+        snake.forEach(p=>ctx.fillRect(p[0]*cw,p[1]*ch,cw,ch));
+        ctx.fillStyle='red';
+        ctx.fillRect(food[0]*cw,food[1]*ch,cw,ch);
+    }
+    function update(){
+        const head=[snake[0][0]+dir[0],snake[0][1]+dir[1]];
+        if(head[0]<0||head[0]>=cols||head[1]<0||head[1]>=rows||snake.some(p=>p[0]===head[0]&&p[1]===head[1])){
+            saveScore(score);
+            stop();
+            alert('Game Over! Score: '+score);
+            return;
+        }
+        snake.unshift(head);
+        if(head[0]===food[0]&&head[1]===food[1]){
+            score++;food=[Math.floor(Math.random()*cols),Math.floor(Math.random()*rows)];
+        }else snake.pop();
+        draw();
+        currentLoop=requestAnimationFrame(update);
+    }
+    document.onkeydown=e=>{
+        if(e.key==='ArrowUp'&&dir
